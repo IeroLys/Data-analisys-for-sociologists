@@ -262,6 +262,22 @@ def process_vacancies_csv(input_file, output_file='vacancies_for_teens_ver2.xlsx
     for col in df_final.columns:
         df_final[col] = df_final[col].apply(clean_text)
 
+    # === Шаг 6.5: Сортировка по годам ===
+    print("📅 Сортируем вакансии по годам (по возрастанию)...")
+
+    # Проверяем, есть ли столбец 'Год' и не пустой ли он
+    if 'Год' in df_final.columns:
+        # Сначала сортируем по Году (возрастание)
+        # Вакансии без года (пустая строка) уйдут в конец
+        df_final = df_final.sort_values(by='Год', ascending=True, na_position='last')
+
+        # Сбрасываем индексы, чтобы они шли по порядку 0, 1, 2...
+        df_final = df_final.reset_index(drop=True)
+
+        print("   ✅ Сортировка выполнена")
+    else:
+        print("   ⚠️ Столбец 'Год' не найден, сортировка пропущена")
+
     # === Шаг 7: Сохранение ===
     df_final.to_excel(output_file, index=False)
     df_final.to_csv(output_file.replace('.xlsx', '.csv'), index=False, encoding='utf-8-sig', sep=';')
