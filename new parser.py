@@ -62,18 +62,30 @@ def process_vacancies_csv(input_file, output_file='vacancies_for_teens_ver2.xlsx
         "skills", "hard_skills", "soft_skills", "salary_period", "role_id_dashboard", "role_name_dashboard"
     ]
 
+    # Читаем CSV с более гибкими настройками
     df = pd.read_csv(
         temp_file,
         header=None,
-        names=expected_columns[:50],
-        on_bad_lines='skip',
-        quoting=csv.QUOTE_ALL,
-        dtype=str
+        names=expected_columns,
+        on_bad_lines='warn',  # Вместо 'skip' — предупреждать о проблемах
+        quoting=csv.QUOTE_MINIMAL,  # Изменено с QUOTE_ALL
+        dtype=str,
+        skipinitialspace=True,
+        engine='python'  # Более гибкий парсер
     )
 
-    # Удаляем временный файл
-    if os.path.exists(temp_file):
-        os.remove(temp_file)
+    # Проверяем количество колонок
+    print(f"📊 Ожидаемо колонок: {len(expected_columns)}")
+    print(f"📊 Фактически колонок: {len(df.columns)}")
+
+    # Если колонок больше — обрезаем
+    if len(df.columns) > len(expected_columns):
+        df = df.iloc[:, :len(expected_columns)]
+    # Если колонок меньше — добавляем пустые
+    elif len(df.columns) < len(expected_columns):
+        for i in range(len(df.columns), len(expected_columns)):
+            df[i] = ''
+        df.columns = expected_columns
 
     # === Шаг 3: Извлечение года из даты создания ===
     def extract_year(date_str):
@@ -118,6 +130,32 @@ def process_vacancies_csv(input_file, output_file='vacancies_for_teens_ver2.xlsx
         desc_fragment = str(description)[:100] if description else ''
         key = f"{str(employer).lower()}|{str(position).lower()}|{str(salary)}|{desc_fragment}"
         return hashlib.md5(key.encode('utf-8')).hexdigest()
+
+    # === Шаг 3.7: Функция извлечения адреса из текста ===
+    def extract_address_from_text(duties_text, city_field):
+        """Извлекает адрес из текста обязанностей"""
+        if pd.isna(duties_text) or not duties_text:
+            return city_field if city_field else ''
+
+        text = str(duties_text)
+
+        # Паттерны для поиска адреса
+        patterns = [
+            r'г\.\s*([А-Яа-яЁё\-]+),\s*([^.;]+?)(?:\.|$)',  # г. Ярославль, улица...
+            r'адрес:\s*([^.;]+?)(?:\.|$)',  # адрес: ...
+            r'по адресу:\s*([^.;]+?)(?:\.|$)',  # по адресу: ...
+            r'место работы:\s*([^.;]+?)(?:\.|$)',  # место работы: ...
+            r'ул\.\s*([А-Яа-яЁё\-]+\s*\d+[А-Яа-я]?)',  # ул. ... д.15
+        ]
+
+        for pattern in patterns:
+            match = re.search(pattern, text, re.IGNORECASE)
+            if match:
+                address = match.group(0).strip()
+                if len(address) > 5 and len(address) < 100:  # Фильтр по длине
+                    return address
+
+        return city_field if city_field else ''
 
     # === Шаг 4: Фильтрация подростковых вакансий ===
     teen_keywords = [
@@ -192,6 +230,13 @@ def process_vacancies_csv(input_file, output_file='vacancies_for_teens_ver2.xlsx
     duplicates_removed = total_before - len(df_final)
     df_final = df_final.drop(columns=['vacancy_hash'])
     print(f"   Удалено дубликатов: {duplicates_removed}")
+
+    # === Извлечение адресов из текста ===
+    print("🏠 Извлекаем адреса из текста...")
+    df_final['Адрес'] = df_final.apply(
+        lambda row: extract_address_from_text(row.get('Обязанности', ''), row.get('Город', '')),
+        axis=1
+    )
 
     # === Шаг 6: Очистка текста с обработкой NaN ===
     def clean_text(x):
