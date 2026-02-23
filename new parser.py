@@ -2,62 +2,40 @@ import pandas as pd
 import re
 import csv
 import os
-import hashlib
 from datetime import datetime
+import hashlib
+
+# === Словари для определения реального города ===
+CITY_KEYWORDS = {
+    'Рыбинск': ['рыбинск', 'рыбинский'],
+    'Ростов': ['ростов', 'ростовский', 'ростов великий'],
+    'Переславль-Залесский': ['переславль', 'переславский'],
+    'Углич': ['углич', 'угличский'],
+    'Тутаев': ['тутаев', 'тутаевский'],
+    'Гаврилов-Ям': ['гаврилов-ям', 'гаврилов-ямский'],
+    'Данилов': ['данилов', 'даниловский'],
+    'Семибратово': ['семибратово', 'семибратовский'],
+    'Некоуз': ['некоуз', 'некоузский'],
+    'Ярославль': ['ярославль', 'ярославский']
+}
 
 
-def extract_city(employer_name, address, default_city="Ярославль"):
-    """
-    Извлекает конкретный город из названия организации или адреса.
-    """
-    cities = [
-        "Переславль-Залесский", "Переславль", "Ростов Великий", "Ростов",
-        "Рыбинск", "Углич", "Ярославль", "Семибратово", "Данилов",
-        "Тутаев", "Гаврилов-Ям", "Любим", "Мышкин", "Пошехонье",
-        "Пречистое", "Некоуз", "Большое Село"
-    ]
-
-    # Проверяем адрес
-    if address and pd.notna(address) and str(address).strip():
-        address_str = str(address).lower()
-        for city in cities:
-            if city.lower() in address_str:
-                return city
-
-    # Проверяем название организации
-    if employer_name and pd.notna(employer_name) and str(employer_name).strip():
-        employer_str = str(employer_name).lower()
-        for city in cities:
-            if city.lower() in employer_str:
-                return city
-
-    return default_city
-
-
-def get_vacancy_hash(row):
-    """
-    Создает уникальный хеш вакансии на основе ключевых полей.
-    """
-    key = f"{row.get('vacancy_name_raw', '')}{row.get('employer_name', '')}{row.get('salary_min', '')}{row.get('date_created', '')}"
-    return hashlib.md5(key.encode('utf-8')).hexdigest()
-
-
-def process_vacancies_csv(input_file, output_file='vacancies_for_teens_14plus.xlsx'):
-    # === Чтение и очистка файла ===
+def process_vacancies_csv(input_file, output_file='vacancies_for_teens_ver2.xlsx'):
+    # === Шаг 1: Чтение и очистка файла ===
     with open(input_file, 'r', encoding='utf-8') as f:
         lines = f.readlines()
 
     cleaned_lines = []
     for line in lines:
-        if line.strip().startswith('"rvr ",'):
-            line = line[5:]
+        if line.strip().startswith('"rvr",'):
+            line = line[5:]  # убираем "rvr",
         cleaned_lines.append(line)
 
     temp_file = 'cleaned_temp.csv'
     with open(temp_file, 'w', encoding='utf-8', newline='') as f:
         f.writelines(cleaned_lines)
 
-    # === Структура колонок ===
+    # === Шаг 2: Задаём структуру колонок ===
     expected_columns = [
         "source", "vacancy_id", "url", "date_created", "date_updated", "is_hidden",
         "vacancy_name_raw", "vacancy_name_lower", "duties", "salary_min", "salary_max", "salary_avg",
@@ -77,18 +55,21 @@ def process_vacancies_csv(input_file, output_file='vacancies_for_teens_14plus.xl
         dtype=str
     )
 
+    # Удаляем временный файл
     if os.path.exists(temp_file):
         os.remove(temp_file)
 
-    # === Извлечение года из даты ===
+    # === Шаг 3: Извлечение года из даты создания ===
     def extract_year(date_str):
         if pd.isna(date_str) or date_str == 'nan' or not date_str:
             return ''
         try:
+            # Формат: 3/1/2024 08:22:13 PM или 6/3/2025 01:29:01 AM
             date_obj = datetime.strptime(date_str.strip(), '%m/%d/%Y %I:%M:%S %p')
             return str(date_obj.year)
         except:
             try:
+                # Альтернативный формат без времени
                 date_obj = datetime.strptime(date_str.strip(), '%m/%d/%Y')
                 return str(date_obj.year)
             except:
@@ -96,7 +77,33 @@ def process_vacancies_csv(input_file, output_file='vacancies_for_teens_14plus.xl
 
     df['year'] = df['date_created'].apply(extract_year)
 
-    # === Фильтрация подростковых вакансий ===
+    # === Шаг 3.5: Функция определения реального города ===
+    def extract_actual_city(employer_name, city_field):
+        """Извлекает реальный город из названия работодателя"""
+        employer_lower = str(employer_name).lower() if employer_name else ''
+
+        # Проверяем название работодателя на наличие топонимов
+        for city, keywords in CITY_KEYWORDS.items():
+            for keyword in keywords:
+                if keyword in employer_lower:
+                    return city
+
+        # Если в поле city_field указан конкретный город (не Ярославль)
+        if city_field and str(city_field).strip() and str(city_field).strip() != 'Ярославль':
+            return str(city_field).strip()
+
+        # По умолчанию оставляем как есть
+        return city_field if city_field else 'Ярославль'
+
+    # === Шаг 3.6: Функция для обнаружения дубликатов ===
+    def generate_vacancy_hash(employer, position, salary, description):
+        """Генерирует хеш для идентификации уникальной вакансии"""
+        # Берём первые 100 символов описания для сравнения
+        desc_fragment = str(description)[:100] if description else ''
+        key = f"{str(employer).lower()}|{str(position).lower()}|{str(salary)}|{desc_fragment}"
+        return hashlib.md5(key.encode('utf-8')).hexdigest()
+
+    # === Шаг 4: Фильтрация подростковых вакансий ===
     teen_keywords = [
         'несовершеннолетн', 'квота.*14', 'квота.*16', 'квота.*18', 'от 14 лет', 'от 16 лет',
         'подросток', 'трудоустройство несовершеннолетних', 'до 18 лет', 'возраст.*14',
@@ -105,28 +112,20 @@ def process_vacancies_csv(input_file, output_file='vacancies_for_teens_14plus.xl
         'возраст от 15', 'возраст от 16', 'возраст от 17', 'возраст от 18'
     ]
     pattern = '|'.join(teen_keywords)
+
     mask = (
             df['duties'].astype(str).str.contains(pattern, case=False, na=False) |
             df['vacancy_name_raw'].astype(str).str.contains(pattern, case=False, na=False)
     )
+
     if 'requirements' in df.columns:
         mask |= df['requirements'].astype(str).str.contains(pattern, case=False, na=False)
 
     df_filtered = df[mask].copy() if mask.any() else df.copy()
+    if not mask.any():
+        print("⚠️ Не найдено вакансий по ключевым словам. Показаны все.")
 
-    # === Удаление дубликатов ===
-    seen_hashes = set()
-    unique_indices = []
-
-    for idx, row in df_filtered.iterrows():
-        v_hash = get_vacancy_hash(row)
-        if v_hash not in seen_hashes:
-            seen_hashes.add(v_hash)
-            unique_indices.append(idx)
-
-    df_filtered = df_filtered.loc[unique_indices].copy()
-
-    # === Выбор нужных колонок ===
+    # === Шаг 5: Выбор нужных колонок ===
     selected_cols = [
         'year', 'vacancy_name_raw', 'employer_name', 'salary_min', 'salary_max', 'currency',
         'schedule_label', 'employment_label', 'region', 'city', 'address', 'duties',
@@ -135,15 +134,7 @@ def process_vacancies_csv(input_file, output_file='vacancies_for_teens_14plus.xl
     available_cols = [col for col in selected_cols if col in df_filtered.columns]
     df_final = df_filtered[available_cols].copy()
 
-    # === Исправление города ===
-    def fix_city(row):
-        current_city = row.get('city', 'Ярославль')
-        return extract_city(row.get('employer_name', ''), row.get('address', ''), current_city)
-
-    if 'city' in df_final.columns:
-        df_final['city'] = df_final.apply(fix_city, axis=1)
-
-    # === Переименование колонок ===
+    # === ПЕРЕИМЕНОВАНИЕ (сначала переименуем!) ===
     df_final.rename(columns={
         'year': 'Год',
         'vacancy_name_raw': 'Вакансия',
@@ -161,23 +152,81 @@ def process_vacancies_csv(input_file, output_file='vacancies_for_teens_14plus.xl
         'url': 'Ссылка'
     }, inplace=True)
 
-    # === Очистка текста ===
+    # === Исправление городов (теперь русские имена работают) ===
+    print("🔍 Исправляем названия городов...")
+    df_final['Город'] = df_final.apply(
+        lambda row: extract_actual_city(row.get('Работодатель', ''), row.get('Город', '')),
+        axis=1
+    )
+
+    # === Удаление дубликатов (теперь русские имена работают) ===
+    print("🔄 Удаляем дубликаты вакансий...")
+    df_final['vacancy_hash'] = df_final.apply(
+        lambda row: generate_vacancy_hash(
+            row.get('Работодатель', ''),
+            row.get('Вакансия', ''),
+            row.get('Зарплата от', ''),
+            row.get('Обязанности', '')
+        ),
+        axis=1
+    )
+
+    total_before = len(df_final)
+    df_final = df_final.drop_duplicates(subset=['vacancy_hash'], keep='first')
+    duplicates_removed = total_before - len(df_final)
+    df_final = df_final.drop(columns=['vacancy_hash'])
+    print(f"   Удалено дубликатов: {duplicates_removed}")
+
+    # === Шаг 6: Очистка текста с обработкой NaN ===
     def clean_text(x):
-        if pd.isna(x) or x == 'nan' or x == '':
+        # Безопасная проверка на пустое значение
+        try:
+            if x is None:
+                return ''
+            if isinstance(x, float) and pd.isna(x):
+                return ''
+            x_str = str(x).strip()
+            if x_str == '' or x_str.lower() == 'nan':
+                return ''
+        except:
             return ''
+
         if isinstance(x, str):
-            x = re.sub(r'<[^>]+>', '', x)
+            x = re.sub(r'<[^>]+>', '', x)  # удаляем HTML-теги
             x = x.replace('&nbsp;', ' ')
             x = re.sub(r'\s+', ' ', x)
             return x.strip()
-        return str(x)
+        return str(x).strip()
 
     for col in df_final.columns:
         df_final[col] = df_final[col].apply(clean_text)
 
-    # === Сохранение ===
+    # === Шаг 7: Сохранение ===
     df_final.to_excel(output_file, index=False)
     df_final.to_csv(output_file.replace('.xlsx', '.csv'), index=False, encoding='utf-8-sig', sep=';')
+
+    print(f"\n✅ Обработано {len(df_final)} вакансий.")
+    # Статистика по городам
+    if 'Город' in df_final.columns:
+        city_stats = df_final['Город'].value_counts()
+        print("\n📊 Распределение вакансий по городам:")
+        for city, count in city_stats.items():
+            print(f"   {city}: {count} вакансий")
+    print(f"Файл сохранён: {output_file}")
+
+    # Предпросмотр
+    preview_cols = ['Год', 'Вакансия', 'Работодатель', 'Город', 'Зарплата от', 'График работы']
+    preview = df_final.head(10)[preview_cols]
+    print("\n🔍 Предпросмотр (первые 10 вакансий):")
+    print(preview.to_string(index=False))
+
+    # Статистика по годам
+    if 'Год' in df_final.columns and not df_final['Год'].empty:
+        year_stats = df_final['Год'].value_counts().sort_index()
+        print("\n📊 Распределение вакансий по годам:")
+        for year, count in year_stats.items():
+            if year:
+                print(f"   {year}: {count} вакансий")
 
 
 if __name__ == "__main__":
